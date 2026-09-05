@@ -123,19 +123,26 @@ export async function interruptSession(args) {
 }
 export async function waitSessions({ session_ids, after = {}, timeout_ms = 20000 }) {
   if (!Array.isArray(session_ids) || !session_ids.length || session_ids.length > 20 || session_ids.some(id => typeof id !== 'string' || !id || id.length > 256)) throw new Error('Choose 1–20 exact session_ids');
-  if (!after || typeof after !== 'object' || Array.isArray(after)) throw new Error('after must be a mapping of session IDs to revisions');
+  if (!after || typeof after !== 'object' || Array.isArray(after)) throw new Error('after must be a mapping of session IDs to cursors');
   if (!Number.isFinite(timeout_ms) || !Number.isInteger(timeout_ms) || timeout_ms < 0 || timeout_ms > 25000) throw new Error('timeout_ms must be between 0 and 25000');
+  const cursor = value => {
+    if (value === null || (Number.isInteger(value) && value >= 0)) return { revision: value, instance_id: null };
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('after cursors must contain revision and instance_id');
+    if (value.revision !== null && (!Number.isInteger(value.revision) || value.revision < 0)) throw new Error('cursor revisions must be non-negative integers or null');
+    if (value.instance_id !== undefined && value.instance_id !== null && (typeof value.instance_id !== 'string' || value.instance_id.length > 100)) throw new Error('cursor instance_id must be a string or null');
+    return { revision: value.revision, instance_id: value.instance_id ?? null };
+  };
   const deadline = Date.now() + timeout_ms;
-  const baseline = { ...after };
+  const baseline = Object.fromEntries(Object.entries(after).map(([id, value]) => [id, cursor(value)]));
   while (true) {
     const { sessions, warning } = await listSessions();
     const selected = session_ids.map(id => sessions.find(s => s.id === id) || { id, status: 'disconnected' });
     for (const session of selected) {
       if (session.control === 'monitor_only') throw new Error('Wait requires connected sessions. Restart and resume monitor-only terminals first.');
-      if (!(session.id in baseline)) baseline[session.id] = session.revision;
+      if (!(session.id in baseline)) baseline[session.id] = { revision: session.revision ?? null, instance_id: session.instance_id ?? null };
     }
-    const changed = selected.filter(s => s.status === 'disconnected' || s.revision !== baseline[s.id]);
-    if (changed.length || Date.now() >= deadline) return { changed, sessions: selected, after: Object.fromEntries(selected.map(s => [s.id, s.revision ?? null])), timedOut: !changed.length, ...(warning ? { warning } : {}) };
+    const changed = selected.filter(s => s.status === 'disconnected' || s.revision !== baseline[s.id].revision || s.instance_id !== baseline[s.id].instance_id);
+    if (changed.length || Date.now() >= deadline) return { changed, sessions: selected, after: Object.fromEntries(selected.map(s => [s.id, { revision: s.revision ?? null, instance_id: s.instance_id ?? null }])), timedOut: !changed.length, ...(warning ? { warning } : {}) };
     await new Promise(resolve => setTimeout(resolve, Math.min(700, Math.max(0, deadline - Date.now()))));
   }
 }

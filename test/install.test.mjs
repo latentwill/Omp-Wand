@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -20,7 +20,7 @@ if [ "$1" = "mcp" ] && [ "$2" = "get" ]; then
     exit 0
   fi
   if [ -f "$CODEX_TEST_REGISTERED" ]; then
-    printf '{"command":"%s","args":["%s"]}\n' "$CODEX_EXPECTED_NODE" "$CODEX_EXPECTED_MCP"
+    printf '{"command":"%s","args":["%s"]}\n' "\${CODEX_REGISTERED_NODE:-$CODEX_EXPECTED_NODE}" "$CODEX_EXPECTED_MCP"
     exit 0
   fi
   echo "Error: No MCP server named 'omp-wand' found." >&2
@@ -61,6 +61,11 @@ test('failed MCP registration leaves retryable pending state and accepts exact a
   await assert.rejects(stat(join(destination, '.omp-wand-install.pending')));
   // A completed install still verifies the exact native registration and updates owned files.
   await install();
+  const nodeAlias = join(root, 'node-alias');
+  await symlink(node, nodeAlias);
+  process.env.CODEX_REGISTERED_NODE = nodeAlias;
+  await install();
+  delete process.env.CODEX_REGISTERED_NODE;
   process.env.CODEX_TEST_CONFLICT = join(root, 'conflict');
   await writeFile(process.env.CODEX_TEST_CONFLICT, 'conflict');
   const runtime = join(destination, 'session.mjs');

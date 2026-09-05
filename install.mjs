@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { mkdir, copyFile, readFile, writeFile, unlink, lstat, realpath } from 'node:fs/promises';
-import { accessSync, constants } from 'node:fs';
+import { accessSync, constants, realpathSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -64,6 +64,7 @@ function registrationObject(value) {
   return null;
 }
 function registrationAbsent(output) { return /^Error: No MCP server named ['"]omp-wand['"] found\.$/i.test(output.trim()); }
+function resolvedExecutable(path) { try { return realpathSync(path); } catch { return resolve(path); } }
 function inspectRegistration(codex, expected) {
   try {
     const output = execFileSync(codex, ['mcp', 'get', extensionName, '--json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -71,7 +72,7 @@ function inspectRegistration(codex, expected) {
     try { parsed = JSON.parse(output); } catch { throw new Error('Codex returned an invalid MCP registration response.'); }
     const found = registrationObject(parsed);
     if (!found) throw new Error('Codex returned no usable MCP transport details.');
-    if (found.command !== expected.command || JSON.stringify(found.args) !== JSON.stringify(expected.args)) throw new Error(`An unrelated MCP server named ${extensionName} already exists; installation stopped.`);
+    if (resolvedExecutable(found.command) !== resolvedExecutable(expected.command) || JSON.stringify(found.args) !== JSON.stringify(expected.args)) throw new Error(`An unrelated MCP server named ${extensionName} already exists; installation stopped.`);
     return true;
   } catch (error) {
     if (error.message.includes('already exists') || error.message.includes('invalid MCP') || error.message.includes('no usable MCP')) throw error;
