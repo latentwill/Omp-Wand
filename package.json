@@ -1,0 +1,9 @@
+{
+  "name": "omp-wand",
+  "version": "1.0.0",
+  "description": "A little magic for your OMP terminals",
+  "type": "module",
+  "scripts": { "test": "node --test test/*.test.mjs" },
+  "engines": { "node": ">=20" },
+  "license": "MIT"
+}

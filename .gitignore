@@ -1,0 +1,35 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.secret
+*.token
+config.toml
+credentials*
+auth/
+config.toml.*
+*.toml
+
+# Omp-Wand runtime state, sockets, receipts, logs, and exports
+.omp/
+*.sock
+*.log
+logs/
+sessions/
+session-exports/
+transcripts/
+backups/
+*.bak
+*.backup
+*.before-omp-wand
+
+# macOS and editor output
+.DS_Store
+.AppleDouble
+.LSOverride
+.vscode/
+.idea/
+
+# Node output
+node_modules/
+coverage/
