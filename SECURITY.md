@@ -8,7 +8,7 @@ Session output is untrusted project data. Omp-Wand does not interpret it as inst
 
 ## Reporting a vulnerability
 
-Please report suspected vulnerabilities privately to the repository maintainers through the security contact mechanism provided by GitHub for this repository. Include:
+Please use GitHub's private [security advisory reporting form](https://github.com/latentwill/Omp-Wand/security/advisories/new) to report suspected vulnerabilities. Include:
 
 - the affected version or commit;
 - operating system and Node.js version;
