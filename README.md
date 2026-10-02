@@ -64,7 +64,7 @@ Remote actions carry a caller-supplied request ID and the current Omp-Wand insta
 
 ## Trust boundary and limits
 
-- Omp-Wand opens private Unix sockets under `~/.omp/omp-wand/`; it does not open a network port.
+- The default Omp-Wand installation opens private Unix sockets under `~/.omp/omp-wand/`; it does not open a network port. An optional companion relay is described below.
 - Socket directories and entries are checked for owner, type, and restrictive permissions. This is not isolation from other applications or processes running as the same OS account.
 - Session output is untrusted project data, not instructions to Codex. Codex receives the transcript content requested through its tools; Omp-Wand cannot redact secrets already present in that content.
 - Remote prompts require explicit target IDs and do not run generic shell or filesystem tools. Prompt text is passed to OMP as data; shell-looking text is not interpreted by this bridge.
@@ -86,6 +86,15 @@ Re-run `node install.mjs` to verify or repair an Omp-Wand installation. It refus
 An older unreleased prototype may have used `omp-remote` paths and registration names. Do not overwrite or restore those files blindly. After publication, migrate or remove that older installation deliberately with Codex's MCP commands and a review of its runtime state; Omp-Wand does not delete unrelated data automatically.
 
 To remove Omp-Wand, run `codex mcp remove omp-wand`, remove the `omp-wand` extension folder, and restart OMP. Remove the launcher folder if it is no longer wanted. Do not restore an entire config backup over later Codex changes.
+
+## Optional events for Work and dots
+
+An opt-in companion relay exposes completion, agent failure, and approval-needed MCP
+webhook events, with authenticated session allowlists and minimal status payloads.
+It preserves the local stdio tools. See [events setup and limits](docs/events.md)
+for the protocol, tests, reliability boundaries, and approval steps for live HTTPS
+exposure, credentials, access grants, and a personal plugin connection. Installation
+does not start the relay or enable events automatically.
 
 ## Development
 

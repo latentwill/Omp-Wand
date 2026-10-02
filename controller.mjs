@@ -81,6 +81,15 @@ export async function listSessions() {
   try { legacy = await legacySessions(live); } catch { warning = 'Process discovery unavailable; only connected sessions are listed.'; }
   return { sessions: [...live.map(({ socket, ...session }) => session), ...legacy], ...(warning ? { warning } : {}) };
 }
+// Local collector only: excludes monitor-only logs and never asks for transcript text.
+export async function collectEvents() {
+  const sessions = await connected();
+  const batches = await Promise.all(sessions.map(async session => {
+    try { return (await request(session.socket, { op: 'events', session_id: session.id })).events || []; }
+    catch { return []; } // Old extensions do not implement this optional operation.
+  }));
+  return batches.flat();
+}
 async function target(id) {
   if (typeof id !== 'string' || !id || id.length > 256) throw new Error('An exact session_id from omp_list_sessions is required');
   const matches = (await connected()).filter(s => s.id === id);

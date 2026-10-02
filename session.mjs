@@ -15,14 +15,22 @@ const assertKeys = (object, keys) => {
 };
 
 // Runs INSIDE the normal OMP TUI. No key injection and no second agent process.
-export function attachRemote(pi) {
+export function attachRemote(pi, { eventsEnabled = process.env.OMP_WAND_EVENTS === '1' } = {}) {
   const instanceId = randomUUID();
   let ctx, server, socketPath, enabled = true, revision = 0, lastActivity = new Date().toISOString();
-  let liveMessage, lastError, submitting = false;
+  let liveMessage, lastError, submitting = false, runActive = false;
   const activeTools = new Map();
   const approvals = new Map();
   const receipts = new Map();
   const clients = new Set();
+  // A bounded local handoff, not a transcript or a replay API. No network I/O in the TUI.
+  const eventBuffer = [];
+  const recordEvent = (name, summary) => {
+    if (!eventsEnabled || !server) return;
+    eventBuffer.push({ eventId: randomUUID(), name, timestamp: new Date().toISOString(), cursor: null,
+      data: { session_id: ctx.sessionManager.getSessionId(), instance_id: instanceId, revision, summary } });
+    if (eventBuffer.length > 128) eventBuffer.shift();
+  };
   const touch = () => { revision++; lastActivity = new Date().toISOString(); };
   const statusLine = () => ctx?.ui.setStatus('Omp-Wand', enabled ? 'Remote connected' : 'Remote paused');
   const snapshot = (read = false) => {
@@ -53,6 +61,12 @@ export function attachRemote(pi) {
     if (req.op === 'status' || req.op === 'read') {
       assertKeys(req, ['op', 'session_id']);
       return snapshot(req.op === 'read');
+    }
+    if (req.op === 'events') {
+      assertKeys(req, ['op', 'session_id']);
+      // The collector connects to the current TUI, but old records retain their original session IDs.
+      // Subscription authorization/filtering happens in the relay, including after a branch switch.
+      return { events: eventBuffer };
     }
     if (!enabled) throw new Error('Remote paused locally. Use /remote on in this terminal.');
     if (!sessionIdIsValid(req.session_id)) throw new Error('An exact session_id is required');
@@ -107,6 +121,7 @@ export function attachRemote(pi) {
     // Only top-level interactive terminals; Deck/RPC/subagents keep their own lifecycle.
     if (!ctx.hasUI || (ctx.mode && ctx.mode !== 'tui')) return;
     await stop();
+    eventBuffer.length = 0;
     ensurePrivateDirSync();
     socketPath = join(remoteDir(), `${process.pid}-${randomUUID().slice(0, 8)}.sock`);
     server = createServer(socket => {
@@ -137,10 +152,18 @@ export function attachRemote(pi) {
   pi.on('session_shutdown', stop);
   for (const event of ['session_switch', 'session_fork', 'session_tree']) pi.on(event, (_e, context) => {
     // Keep live-instance receipts across branch switches; fingerprints include session IDs.
-    ctx = context; liveMessage = undefined; activeTools.clear(); approvals.clear(); lastError = undefined; touch();
+    ctx = context; liveMessage = undefined; activeTools.clear(); approvals.clear(); lastError = undefined; runActive = false; touch();
   });
-  pi.on('agent_start', (_e, context) => { ctx = context; liveMessage = undefined; lastError = undefined; touch(); });
-  pi.on('agent_end', (_e, context) => { ctx = context; liveMessage = undefined; activeTools.clear(); touch(); });
+  pi.on('agent_start', (_e, context) => { ctx = context; liveMessage = undefined; lastError = undefined; runActive = true; touch(); });
+  pi.on('agent_end', (event, context) => {
+    ctx = context; liveMessage = undefined; activeTools.clear(); touch();
+    if (event.willContinue || !runActive) return;
+    runActive = false;
+    const final = (event.messages || []).filter(m => m.role === 'assistant').at(-1);
+    if (final?.stopReason === 'aborted') return;
+    if (final?.stopReason === 'error' || final?.errorMessage) recordEvent('omp.job.failed', 'OMP run ended with an agent error.');
+    else recordEvent('omp.job.completed', 'OMP run ended. Read the session to assess the result.');
+  });
   pi.on('message_update', (event, context) => { ctx = context; liveMessage = event.message; });
   pi.on('message_end', (event, context) => {
     ctx = context; liveMessage = undefined;
@@ -163,7 +186,9 @@ export function attachRemote(pi) {
     },
   });
   pi.on('tool_approval_requested', (event, context) => {
-    ctx = context; approvals.set(event.toolCallId, { tool: event.toolName, reason: event.reason || null }); touch();
+    ctx = context; const alreadyPending = approvals.has(event.toolCallId);
+    approvals.set(event.toolCallId, { tool: event.toolName, reason: event.reason || null }); touch();
+    if (!alreadyPending) recordEvent('omp.approval.needed', 'OMP is waiting for approval in the local terminal.');
   });
   pi.on('tool_approval_resolved', (event, context) => { ctx = context; approvals.delete(event.toolCallId); touch(); });
 }

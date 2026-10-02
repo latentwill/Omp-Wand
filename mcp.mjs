@@ -69,7 +69,7 @@ function validateArguments(name, provided) {
   }
   return args;
 }
-export async function dispatch(message) {
+export async function dispatch(message, overrides = {}) {
   if (!isPlainObject(message) || typeof message.jsonrpc !== 'string' || message.jsonrpc !== '2.0' || typeof message.method !== 'string') return { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid request' } };
   const hasId = Object.hasOwn(message, 'id');
   if (hasId && (message.id === null || (typeof message.id !== 'string' && typeof message.id !== 'number') || (typeof message.id === 'number' && !Number.isFinite(message.id)))) return { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid request id' } };
@@ -86,7 +86,7 @@ export async function dispatch(message) {
   if (message.method === 'tools/list') return result({ tools: toolDefinitions });
   if (message.method !== 'tools/call') return error(-32601, 'Method not found');
   if (!isPlainObject(message.params) || typeof message.params.name !== 'string') return error(-32602, 'Invalid tools/call params');
-  const handler = handlers[message.params.name];
+  const handler = overrides[message.params.name] || handlers[message.params.name];
   if (!handler || !definitions.has(message.params.name)) return error(-32602, 'Unknown tool');
   let args;
   try { args = validateArguments(message.params.name, message.params.arguments); }

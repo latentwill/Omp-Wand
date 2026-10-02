@@ -18,6 +18,8 @@ logs/
 sessions/
 session-exports/
 transcripts/
+relay-config.json
+relay-state/
 backups/
 *.bak
 *.backup
