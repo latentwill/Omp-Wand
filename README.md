@@ -15,7 +15,7 @@ node install.mjs            # Claude Code and Codex, whichever are installed
 node install.mjs --claude   # Claude Code only
 ```
 
-The installer copies the extension to `~/.omp/agent/extensions/omp-wand/` and registers the `omp-wand` MCP server (`claude mcp add --scope user`, `codex mcp add`). Run it again after you pull changes.
+The installer copies the extension to `~/.omp/agent/extensions/omp-wand/` and registers the `omp-wand` MCP server (`claude mcp add --scope user`, `codex mcp add`). For Codex it also sets `tool_timeout_sec = 900` (the default of 60 seconds cuts off long waits) and `default_tools_approval_mode = "approve"` on that server. Run it again after you pull changes.
 
 New `omp` terminals connect automatically; the footer shows **Remote connected**. A terminal that was already open needs a restart: exit it when idle and run `omp --resume <session-id>`. Restart Claude Code so it loads the new tools.
 
@@ -78,7 +78,7 @@ The tests use fake OMP and UI objects; they do not contact a model. For a real-T
 omp --no-session --no-extensions -e index.ts -e test/offline-fixture.ts --model omp-wand-test/echo
 ```
 
-The socket path must stay under 104 bytes (macOS limit). If you set `OMP_REMOTE_DIR` for a test, use a short folder.
+The socket path must stay under 104 bytes (macOS limit). If you set `OMP_WAND_DIR` for a test, use a short folder.
 
 ## License
 

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
 const dir = await mkdtemp(join(tmpdir(), 'ompw-'));
-process.env.OMP_REMOTE_DIR = dir;
+process.env.OMP_WAND_DIR = dir;
 const { attachRemote } = await import('../session.mjs');
 const { listSessions, readSession, sendPrompt, answerDialog, waitSessions, interruptSession, renameSession } = await import('../controller.mjs');
 const { dispatch } = await import('../mcp.mjs');

@@ -5,7 +5,7 @@ import { lstat, mkdir } from 'node:fs/promises';
 import { lstatSync, mkdirSync } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 
-export const remoteDir = () => process.env.OMP_REMOTE_DIR || join(homedir(), '.omp', 'omp-wand');
+export const remoteDir = () => process.env.OMP_WAND_DIR || join(homedir(), '.omp', 'omp-wand');
 export const MAX_FRAME = 1024 * 1024;
 export const CLIENT_TIMEOUT = 2500;
 

@@ -15,6 +15,13 @@ for (const cli of ['claude', 'codex', 'omp', 'node']) {
   await writeFile(join(bin, cli), `#!/bin/sh\necho "${cli} $*" >> "${log}"\nexit 0\n`);
   await chmod(join(bin, cli), 0o755);
 }
+// Fake Codex config: `mcp add` writes the server table the way codex does.
+const codexHome = join(root, 'codex');
+const codexConfig = join(codexHome, 'config.toml');
+await mkdir(codexHome);
+await writeFile(codexConfig, 'model = "x"\n\n[mcp_servers.other]\ncommand = "a"\n');
+await writeFile(join(bin, 'codex'), `#!/bin/sh\necho "codex $*" >> "${log}"\nif [ "$2" = add ]; then grep -q 'mcp_servers.omp-wand' "${codexConfig}" || printf '\\n[mcp_servers.omp-wand]\\ncommand = "node"\\n' >> "${codexConfig}"; fi\nexit 0\n`);
+process.env.CODEX_HOME = codexHome;
 process.env.HOME = home;
 process.env.PATH = `${bin}:${process.env.PATH}`;
 const { install, runtimeFiles } = await import('../install.mjs');
@@ -31,6 +38,14 @@ test('copies the extension and registers with each CLI (remove, then add)', asyn
     'codex mcp remove omp-wand',
     `codex mcp add omp-wand -- ${server}`,
   ]);
+});
+
+test('Codex gets a long tool timeout and no per-call approval, once', async () => {
+  await install(['--codex']);
+  const config = await readFile(codexConfig, 'utf8');
+  assert.match(config, /\[mcp_servers\.omp-wand\]\ncommand = "node"\ntool_timeout_sec = 900\ndefault_tools_approval_mode = "approve"\n/);
+  assert.equal(config.match(/tool_timeout_sec/g).length, 1);
+  assert.match(config, /\[mcp_servers\.other\]\ncommand = "a"/);
 });
 
 test('--claude limits registration to Claude Code', async () => {
