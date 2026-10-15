@@ -1,143 +1,72 @@
 #!/usr/bin/env node
-import { mkdir, copyFile, readFile, writeFile, unlink, lstat, realpath } from 'node:fs/promises';
-import { accessSync, constants, realpathSync } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
+// Install the OMP extension and register the omp-wand MCP server with Claude Code and/or Codex.
+// Usage: node install.mjs [--claude] [--codex]   (default: every CLI found on PATH)
+import { mkdir, copyFile, lstat, readFile, writeFile } from 'node:fs/promises';
+import { accessSync, constants } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 
 const source = dirname(fileURLToPath(import.meta.url));
-const extensionName = 'omp-wand';
-const destination = join(homedir(), '.omp/agent/extensions', extensionName);
-const markerName = '.omp-wand-install';
-const pendingName = '.omp-wand-install.pending';
-const runtimeFiles = ['index.ts', 'session.mjs', 'shared.mjs', 'controller.mjs', 'mcp.mjs'];
-const currentUid = () => typeof process.getuid === 'function' ? process.getuid() : null;
+export const destination = () => join(homedir(), '.omp/agent/extensions/omp-wand');
+export const runtimeFiles = ['index.ts', 'session.mjs', 'dialogs.mjs', 'shared.mjs', 'controller.mjs', 'mcp.mjs'];
+
 export function findBinary(name) {
-  const dirs = [...(process.env.PATH || '').split(':'), join(homedir(), '.bun/bin'), '/opt/homebrew/bin', '/usr/local/bin', '/Applications/Codex.app/Contents/Resources'];
-  for (const dir of dirs) {
-    if (!dir) continue;
+  const dirs = [...(process.env.PATH || '').split(':'), join(homedir(), '.bun/bin'), join(homedir(), '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin'];
+  for (const dir of dirs.filter(Boolean)) {
     const file = join(dir, name);
     try { accessSync(file, constants.X_OK); return file; } catch {}
   }
-  throw new Error(`${name} is required but was not found. Install ${name}, then launch again.`);
-}
-async function regularOwned(path, label, maxBytes = 4096) {
-  const stat = await lstat(path);
-  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`Refusing non-regular ${label} ${path}.`);
-  if (currentUid() !== null && stat.uid !== currentUid()) throw new Error(`Refusing ${label} owned by another user.`);
-  if ((stat.mode & 0o022) !== 0) throw new Error(`Refusing ${label} writable by another user.`);
-  if (stat.size > maxBytes) throw new Error(`${label} is too large.`);
-  return stat;
-}
-async function ensureDestination() {
-  const parent = dirname(destination);
-  await mkdir(parent, { recursive: true, mode: 0o755 });
-  const homeReal = await realpath(homedir());
-  if ((await realpath(parent)) !== resolve(join(homeReal, '.omp/agent/extensions'))) throw new Error(`Refusing symlinked extension parent ${parent}.`);
-  let stat;
-  try { stat = await lstat(destination); } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    await mkdir(destination, { mode: 0o700 });
-    stat = await lstat(destination);
-  }
-  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Refusing to use unrelated extension path ${destination}.`);
-  return stat;
-}
-async function markerState(name, expected) {
-  const path = join(destination, name);
-  try {
-    await regularOwned(path, `${name} marker`);
-    return (await readFile(path, 'utf8')) === expected;
-  } catch (error) {
-    if (error.code === 'ENOENT') return false;
-    throw error;
-  }
-}
-function registrationObject(value) {
-  if (!value || typeof value !== 'object') return null;
-  if (typeof value.command === 'string' && Array.isArray(value.args)) return { command: value.command, args: value.args };
-  for (const child of Object.values(value)) {
-    const found = registrationObject(child);
-    if (found) return found;
-  }
   return null;
 }
-function registrationAbsent(output) { return /^Error: No MCP server named ['"]omp-wand['"] found\.$/i.test(output.trim()); }
-function resolvedExecutable(path) { try { return realpathSync(path); } catch { return resolve(path); } }
-function inspectRegistration(codex, expected) {
-  try {
-    const output = execFileSync(codex, ['mcp', 'get', extensionName, '--json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-    let parsed;
-    try { parsed = JSON.parse(output); } catch { throw new Error('Codex returned an invalid MCP registration response.'); }
-    const found = registrationObject(parsed);
-    if (!found) throw new Error('Codex returned no usable MCP transport details.');
-    if (resolvedExecutable(found.command) !== resolvedExecutable(expected.command) || JSON.stringify(found.args) !== JSON.stringify(expected.args)) throw new Error(`An unrelated MCP server named ${extensionName} already exists; installation stopped.`);
-    return true;
-  } catch (error) {
-    if (error.message.includes('already exists') || error.message.includes('invalid MCP') || error.message.includes('no usable MCP')) throw error;
-    const output = `${error.stdout || ''}\n${error.stderr || ''}`;
-    if (registrationAbsent(output)) return false;
-    throw new Error(`Could not safely inspect the ${extensionName} MCP registration; installation stopped.`);
-  }
+
+export async function copyExtension(dest = destination()) {
+  await mkdir(dest, { recursive: true, mode: 0o700 });
+  if ((await lstat(dest)).isSymbolicLink()) throw new Error(`Refusing symlinked extension folder ${dest}`);
+  for (const file of runtimeFiles) await copyFile(join(source, file), join(dest, file));
+  return dest;
 }
-async function assertConfigPath(path) {
-  try {
-    const stat = await lstat(path);
-    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`Refusing to follow non-regular Codex config path ${path}.`);
-  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+
+const run = (bin, args) => spawnSync(bin, args, { encoding: 'utf8' });
+
+// Remove then add, so a re-run repairs a stale path. A missing entry on remove is expected.
+function register(cli, server) {
+  const bin = findBinary(cli);
+  if (!bin) return `${cli}: not found, skipped`;
+  const scope = cli === 'claude' ? ['--scope', 'user'] : [];
+  run(bin, ['mcp', 'remove', ...scope, 'omp-wand']);
+  const added = run(bin, ['mcp', 'add', ...scope, 'omp-wand', '--', ...server]);
+  if (added.status !== 0) throw new Error(`${cli} mcp add failed: ${(added.stderr || added.stdout).trim()}`);
+  return `${cli}: registered omp-wand`;
 }
-async function copyRuntimeFiles(ours) {
-  for (const file of runtimeFiles) {
-    const target = join(destination, file);
-    try {
-      const stat = await lstat(target);
-      if (stat.isSymbolicLink() || !stat.isFile() || (currentUid() !== null && stat.uid !== currentUid()) || (stat.mode & 0o022) !== 0 || !ours) throw new Error(`Refusing to overwrite unrelated extension file ${target}.`);
-    } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    await copyFile(join(source, file), target);
-  }
+
+// Codex defaults to a 60 s tool timeout, which cuts off long omp_wait calls, and asks before each call.
+const CODEX_SETTINGS = { tool_timeout_sec: '900', default_tools_approval_mode: '"approve"' };
+export async function configureCodex(config = join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'config.toml')) {
+  const lines = (await readFile(config, 'utf8')).split('\n');
+  const start = lines.findIndex(line => line.trim() === '[mcp_servers.omp-wand]');
+  if (start < 0) throw new Error(`No [mcp_servers.omp-wand] table in ${config}`);
+  let end = lines.findIndex((line, i) => i > start && line.trim().startsWith('['));
+  if (end < 0) end = lines.length;
+  const keep = lines.slice(start + 1, end).filter(line => !Object.keys(CODEX_SETTINGS).some(key => line.trim().startsWith(`${key} `) || line.trim().startsWith(`${key}=`)));
+  const settings = Object.entries(CODEX_SETTINGS).map(([key, value]) => `${key} = ${value}`);
+  await writeFile(config, [...lines.slice(0, start + 1), ...keep.filter(line => line.trim()), ...settings, '', ...lines.slice(end)].join('\n'));
 }
-export async function install() {
-  const codex = findBinary('codex'); findBinary('omp');
-  const node = findBinary('node');
-  await ensureDestination();
-  const marker = join(destination, markerName);
-  const pending = join(destination, pendingName);
-  const markerExpected = 'Omp-Wand 1.0.0\n';
-  const pendingExpected = 'Omp-Wand installation in progress\n';
-  const complete = await markerState(markerName, markerExpected);
-  const pendingState = await markerState(pendingName, pendingExpected);
-  if (!complete && !pendingState) {
-    for (const file of runtimeFiles) {
-      try { await lstat(join(destination, file)); throw new Error(`An unrelated extension already exists at ${destination}; installation stopped without replacing it.`); }
-      catch (error) { if (error.code !== 'ENOENT') throw error; }
-    }
+
+export async function install(argv = process.argv.slice(2)) {
+  if (!findBinary('omp')) console.warn('Warning: omp was not found on PATH.');
+  const dest = await copyExtension();
+  // The PATH node (e.g. /opt/homebrew/bin/node) survives upgrades; process.execPath can be a versioned Cellar path.
+  const server = [findBinary('node') ?? process.execPath, join(dest, 'mcp.mjs')];
+  const wanted = ['claude', 'codex'].filter(cli => !argv.length || argv.includes(`--${cli}`));
+  console.log(`Extension installed in ${dest}`);
+  for (const cli of wanted) {
+    const result = register(cli, server);
+    if (cli === 'codex' && !result.includes('skipped')) await configureCodex();
+    console.log(result);
   }
-  const configHome = process.env.CODEX_HOME || join(homedir(), '.codex');
-  await mkdir(configHome, { recursive: true, mode: 0o700 });
-  const configHomeStat = await lstat(configHome);
-  if (configHomeStat.isSymbolicLink() || !configHomeStat.isDirectory()) throw new Error(`Refusing non-regular Codex config directory ${configHome}.`);
-  const config = join(configHome, 'config.toml');
-  await assertConfigPath(config);
-  const expected = { command: node, args: [join(destination, 'mcp.mjs')] };
-  // Inspect the installed Codex representation before changing any extension files.
-  const registered = inspectRegistration(codex, expected);
-  if (!complete && !pendingState) await writeFile(pending, pendingExpected, { flag: 'wx', mode: 0o600 });
-  await copyRuntimeFiles(true);
-  if (!registered) {
-    const configText = await readFile(config, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error; });
-    if (configText) {
-      const backup = `${config}.before-omp-wand`;
-      await assertConfigPath(backup);
-      try { await writeFile(backup, configText, { flag: 'wx', mode: 0o600 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
-    }
-    // The completion marker is written only after this registration succeeds.
-    execFileSync(codex, ['mcp', 'add', extensionName, '--', node, join(destination, 'mcp.mjs')], { stdio: 'inherit' });
-  }
-  await writeFile(marker, markerExpected, { flag: 'wx', mode: 0o600 }).catch(error => { if (error.code !== 'EEXIST') throw error; });
-  await unlink(pending).catch(error => { if (error.code !== 'ENOENT') throw error; });
-  console.log('Omp-Wand installed. New omp terminals connect automatically.');
-  console.log('For already-open OMP terminals, exit when idle and use the printed omp --resume command once. Reconnect MCP or restart Codex to load its new tools.');
-  return destination;
+  console.log('New omp terminals connect automatically. Restart already-open terminals (omp --resume <id>) to load the extension.');
 }
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) install().catch(error => { console.error(error.message); process.exitCode = 1; });

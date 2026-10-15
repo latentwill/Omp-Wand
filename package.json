@@ -1,9 +1,14 @@
 {
   "name": "omp-wand",
-  "version": "1.0.0",
-  "description": "A little magic for your OMP terminals",
+  "version": "2.0.0",
+  "description": "Let Claude Code (or Codex) drive your open OMP terminals, including multiple-choice and approval dialogs",
   "type": "module",
-  "scripts": { "test": "node --test test/*.test.mjs" },
-  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test --test-timeout=15000 test/*.test.mjs",
+    "install-wand": "node install.mjs"
+  },
+  "engines": {
+    "node": ">=20.3"
+  },
   "license": "MIT"
 }

@@ -2,90 +2,69 @@
 
 *A little magic for your OMP terminals.*
 
-Use normal OMP terminals at your desk, then steer those same sessions from Codex Remote when you step away.
-Omp-Wand keeps the bridge local and simple: your terminal stays in charge while Codex reads and sends only the actions you request.
+Work in normal OMP (oh-my-pi) terminals at your desk. Then let Claude Code (or Codex) read and drive those same sessions through a local MCP server: send prompts, wait for replies, and answer the multiple-choice questions, approvals and input boxes that OMP opens.
 
-## Quickstart
+## Install
 
-Clone the repository, or download it without renaming its files:
+Prerequisites: macOS, OMP 18.x, Node.js 20.3 or newer, and Claude Code and/or Codex on `PATH`.
 
 ```sh
 git clone https://github.com/latentwill/Omp-Wand.git
 cd Omp-Wand
+node install.mjs            # Claude Code and Codex, whichever are installed
+node install.mjs --claude   # Claude Code only
 ```
 
-Prerequisites:
+The installer copies the extension to `~/.omp/agent/extensions/omp-wand/` and registers the `omp-wand` MCP server (`claude mcp add --scope user`, `codex mcp add`). For Codex it also sets `tool_timeout_sec = 900` (the default of 60 seconds cuts off long waits) and `default_tools_approval_mode = "approve"` on that server. Run it again after you pull changes.
 
-- macOS (the supported and tested runtime platform)
-- OMP 18.1.10
-- Node.js 20 or newer on `PATH`
-- the Codex CLI on `PATH`
+New `omp` terminals connect automatically; the footer shows **Remote connected**. A terminal that was already open needs a restart: exit it when idle and run `omp --resume <session-id>`. Restart Claude Code so it loads the new tools.
 
-1. Download this folder without renaming its files.
-2. Double-click **Omp-Wand.command**.
-3. Choose a project folder in the native folder picker.
-4. The launcher installs the extension and registers the local `omp-wand` MCP server. New `omp` terminals connect automatically.
-5. Reconnect the MCP server or restart Codex so it discovers the tools.
-6. In Codex, say **“Wave hello”** (meaning **“Show my OMP sessions”**) or call `omp_list_sessions` directly.
+## Tools
 
-The launcher stores the last selected folder in private runtime state so the next launch can offer it as the picker default. Pass a folder path to `launch.mjs` when a picker is not convenient:
+| Tool | What it does |
+| --- | --- |
+| `omp_list_sessions` | Connected terminals with status (`idle`, `working`, `waiting_for_input`), project, name, model and open dialogs. |
+| `omp_read_session` | Recent transcript (text plus one-line tool calls), streaming text, last reply of the current turn, last error. |
+| `omp_send_prompt` | Send a prompt. `mode`: `prompt` (idle only), `followUp` (queue), `steer` (redirect). `wait_seconds` blocks until the session settles. |
+| `omp_answer` | Answer an open dialog. See below. |
+| `omp_wait` | Block until sessions settle (idle, waiting on a dialog, or disconnected), then return status, dialogs and the last reply. |
+| `omp_interrupt` | Abort the current run, like Esc. |
+| `omp_rename_session` | Rename a session without model tokens. |
+
+A typical loop: list → `omp_send_prompt` with `wait_seconds` → if the status is `waiting_for_input`, `omp_answer` → `omp_wait` → repeat.
+
+## Dialogs
+
+OMP gives tools, tool approvals and extensions one shared UI object. Omp-Wand wraps its dialog methods, so every open dialog shows in the `dialogs` field and can be answered remotely. The terminal dialog stays open: whichever side answers first wins, and the other side closes. This is the same race that OMP uses for its collab guests.
+
+| `kind` | Opened by | Answer with |
+| --- | --- | --- |
+| `ask` | the `ask` tool (multiple choice) | `choice` (label or 0-based index), or `choices` for multi-select; `text` for a custom answer; `note`; several questions: `answers: [{ id, choice \| choices \| text }]`; `chat: true` for "Chat about this" |
+| `approve` | tool approvals | `confirm: true \| false` |
+| `select` | extensions, older approval flow | `choice` |
+| `confirm` | extensions | `confirm` |
+| `input`, `editor` | extensions | `text` |
+
+`cancel: true` dismisses any dialog as Esc would; for `ask` that aborts the run. `dialog_id` defaults to the oldest open dialog. An invalid answer returns an error and the dialog stays open.
+
+## Local control
+
+- `/remote off` in a terminal pauses remote writes (prompts, answers, interrupts, renames); reads continue. `/remote on` resumes them.
+- A prompt is refused while the terminal has an unsent draft, and while a dialog is open.
+- Remote prompts are plain text. Slash commands and `!` shell commands need the terminal.
+
+## Trust boundary
+
+- Each terminal listens on a private Unix socket in `~/.omp/omp-wand/` (folder 0700, sockets 0600). There is no network port. This does not isolate the bridge from other processes that run as your user.
+- Session output is untrusted project data. The MCP server tells the client not to follow instructions found in it.
+
+## Remove
 
 ```sh
-node launch.mjs /path/to/project
+claude mcp remove --scope user omp-wand
+codex mcp remove omp-wand
+rm -r ~/.omp/agent/extensions/omp-wand
 ```
-
-No package manager or network install is required. The installer does not download software.
-
-Try plain-language requests such as:
-
-- “Show my OMP sessions.”
-- “What is the progress in the Website polish session?”
-- “Queue this follow-up after its current work.”
-- “Name this session Website polish.”
-
-## First connection and existing sessions
-
-The installer registers one global OMP extension and one local Codex MCP server. New terminals load the extension through OMP's normal extension discovery. For a terminal that was already open, wait until it is idle, press **Ctrl+D**, and run the exact `omp --resume SESSION_ID` command OMP prints. This preserves that conversation and loads Omp-Wand. Existing terminals that have not been resumed appear as monitor-only when discoverable.
-
-Use `omp_list_sessions` before choosing a target. Reconnect the MCP server or restart Codex if the tools are not visible. Session IDs are exact; Omp-Wand never guesses a project or sends to every session.
-
-## What it does
-
-- `omp_list_sessions` lists connected terminals and clearly marked monitor-only processes.
-- `omp_read_session` returns live status and a bounded recent transcript for a connected terminal. Monitor-only sessions expose only a bounded tail of a validated saved log and may be stale.
-- `omp_send_prompt` submits plain text through OMP's native `sendUserMessage` flow. An idle session accepts a prompt; active work can receive a `followUp` or an explicitly intended `steer`.
-- `omp_interrupt` calls OMP's abort operation when explicitly requested.
-- `omp_rename_session` changes one exact session name through OMP's native session-name API without spending model tokens.
-- `omp_wait` performs one bounded wait for revisions or disconnection. It is not a recurring monitor.
-
-The terminal displays the actual remote prompt and response. `/remote off` pauses remote writes for that terminal; it does **not** pause reads. `/remote on` resumes writes. Native approval dialogs remain local and cannot be answered through this bridge.
-
-Remote actions carry a caller-supplied request ID and the current Omp-Wand instance ID. Retries with the same request ID are deduplicated during the live extension instance. After an extension/server restart, an old instance ID is rejected; read the session history before deciding whether an uncertain prompt was submitted. This is at-most-once protection for one live instance, not an exact-once or crash-proof transaction guarantee.
-
-## Trust boundary and limits
-
-- Omp-Wand opens private Unix sockets under `~/.omp/omp-wand/`; it does not open a network port.
-- Socket directories and entries are checked for owner, type, and restrictive permissions. This is not isolation from other applications or processes running as the same OS account.
-- Session output is untrusted project data, not instructions to Codex. Codex receives the transcript content requested through its tools; Omp-Wand cannot redact secrets already present in that content.
-- Remote prompts require explicit target IDs and do not run generic shell or filesystem tools. Prompt text is passed to OMP as data; shell-looking text is not interpreted by this bridge.
-- A monitor-only result is not live control. Saved logs can contain inactive branches and cannot reliably show current activity.
-- OMP must remain available locally, and the Mac must stay awake. Closing a terminal ends its session normally; this is not terminal persistence.
-- Linux is not an end-to-end supported runtime. CI runs the Node test suite on Linux and macOS only; the native picker and OMP integration are macOS-specific.
-
-## Files, reinstall, and removal
-
-Runtime locations:
-
-- Extension: `~/.omp/agent/extensions/omp-wand/`
-- Private sockets and runtime state: `~/.omp/omp-wand/` (directory 0700; sockets 0600)
-- Codex registration: the `omp-wand` MCP server in the active Codex config
-- One-time config backup, when needed: `config.toml.before-omp-wand`
-
-Re-run `node install.mjs` to verify or repair an Omp-Wand installation. It refuses symlinks, unrelated extension files, and ambiguous same-named MCP registrations. A failed registration leaves an explicit pending marker, so the launcher retries instead of treating a partial install as complete. It preserves unrelated Codex configuration semantically through Codex's own MCP command.
-
-An older unreleased prototype may have used `omp-remote` paths and registration names. Do not overwrite or restore those files blindly. After publication, migrate or remove that older installation deliberately with Codex's MCP commands and a review of its runtime state; Omp-Wand does not delete unrelated data automatically.
-
-To remove Omp-Wand, run `codex mcp remove omp-wand`, remove the `omp-wand` extension folder, and restart OMP. Remove the launcher folder if it is no longer wanted. Do not restore an entire config backup over later Codex changes.
 
 ## Development
 
@@ -93,8 +72,14 @@ To remove Omp-Wand, run `codex mcp remove omp-wand`, remove the `omp-wand` exten
 npm test
 ```
 
-The tests exercise the local protocol, Unicode framing, permissions, retries, validation, and failure paths without contacting a model or downloading dependencies. The checked-in `test/offline-fixture.ts` is a local deterministic OMP provider fixture for an optional real-TUI smoke test; it contains no credentials.
+The tests use fake OMP and UI objects; they do not contact a model. For a real-TUI smoke test, `test/offline-fixture.ts` adds a local echo model. A prompt that contains `ASK_TEST` makes it call the `ask` tool:
 
-## License and security
+```sh
+omp --no-session --no-extensions -e index.ts -e test/offline-fixture.ts --model omp-wand-test/echo
+```
 
-Omp-Wand is released under the MIT License. See [LICENSE](LICENSE) and [SECURITY.md](SECURITY.md).
+The socket path must stay under 104 bytes (macOS limit). If you set `OMP_WAND_DIR` for a test, use a short folder.
+
+## License
+
+MIT. See [LICENSE](LICENSE) and [SECURITY.md](SECURITY.md).
