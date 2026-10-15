@@ -6,8 +6,8 @@ import { lstatSync, mkdirSync } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 
 export const remoteDir = () => process.env.OMP_REMOTE_DIR || join(homedir(), '.omp', 'omp-wand');
-export const MAX_FRAME = 512 * 1024;
-export const MAX_CLIENT_TIMEOUT = 2500;
+export const MAX_FRAME = 1024 * 1024;
+export const CLIENT_TIMEOUT = 2500;
 
 function uid() { return typeof process.getuid === 'function' ? process.getuid() : null; }
 function assertOwner(stat, label) {
@@ -25,32 +25,40 @@ function assertSocketStat(stat, label) {
   if ((stat.mode & 0o777) !== 0o600) throw new Error(`${label} must have mode 0600`);
 }
 export async function ensurePrivateDir(path = remoteDir()) {
-  try { await mkdir(path, { recursive: true, mode: 0o700 }); } catch (error) { throw new Error(`Cannot create private socket directory: ${error.message}`); }
-  const stat = await lstat(path);
-  assertPrivateDirectoryStat(stat, 'Private socket directory');
-  return stat;
+  await mkdir(path, { recursive: true, mode: 0o700 });
+  assertPrivateDirectoryStat(await lstat(path), 'Private socket directory');
 }
 export function ensurePrivateDirSync(path = remoteDir()) {
-  try { mkdirSync(path, { recursive: true, mode: 0o700 }); } catch (error) { throw new Error(`Cannot create private socket directory: ${error.message}`); }
-  const stat = lstatSync(path);
-  assertPrivateDirectoryStat(stat, 'Private socket directory');
-  return stat;
+  mkdirSync(path, { recursive: true, mode: 0o700 });
+  assertPrivateDirectoryStat(lstatSync(path), 'Private socket directory');
 }
-export async function assertPrivateSocket(path) {
-  const stat = await lstat(path);
-  assertSocketStat(stat, 'Socket entry');
-  return stat;
+export async function assertPrivateSocket(path) { assertSocketStat(await lstat(path), 'Socket entry'); }
+export function assertPrivateSocketSync(path) { assertSocketStat(lstatSync(path), 'Socket entry'); }
+
+const clip = (text, max) => text.length > max ? `…${text.slice(-max)}` : text;
+const clipHead = (text, max) => text.length > max ? `${text.slice(0, max)}…` : text;
+
+/** Plain text of an OMP message: text blocks only, tail-clipped. */
+export function messageText(message, max = 16000) {
+  if (typeof message?.content === 'string') return clip(message.content, max);
+  return clip((message?.content || []).filter(c => c.type === 'text' && typeof c.text === 'string').map(c => c.text).join('\n'), max);
 }
-export function assertPrivateSocketSync(path) {
-  const stat = lstatSync(path);
-  assertSocketStat(stat, 'Socket entry');
-  return stat;
+
+/** Compact transcript entry: text plus one-line tool calls, so the reader can follow what the agent did. */
+export function transcriptEntry(message, max = 4000) {
+  const entry = { role: message.role, text: messageText(message, max) };
+  if (message.role === 'toolResult') {
+    entry.tool = message.toolName;
+    entry.text = clip(entry.text, 600);
+    if (message.isError) entry.error = true;
+  }
+  const calls = Array.isArray(message.content) ? message.content.filter(c => c.type === 'toolCall') : [];
+  if (calls.length) entry.tool_calls = calls.map(c => `${c.name}(${clipHead(JSON.stringify(c.arguments ?? {}), 300)})`);
+  return entry;
 }
-export function messageText(message) {
-  if (typeof message?.content === 'string') return message.content.slice(-16000);
-  return (message?.content || []).filter(c => c.type === 'text' && typeof c.text === 'string').map(c => c.text).join('\n').slice(-16000);
-}
-export async function request(socketPath, payload, timeout = MAX_CLIENT_TIMEOUT) {
+
+/** One newline-delimited JSON request/response over a private Unix socket. */
+export async function request(socketPath, payload, timeout = CLIENT_TIMEOUT) {
   await assertPrivateSocket(socketPath);
   return new Promise((resolve, reject) => {
     const socket = createConnection(socketPath);
@@ -65,13 +73,11 @@ export async function request(socketPath, payload, timeout = MAX_CLIENT_TIMEOUT)
       socket.destroy();
       error ? reject(error) : resolve(result);
     };
-    const deadline = setTimeout(() => finish(new Error('Session did not respond; delivery may be uncertain. Retry with the same request_id.')), timeout);
+    const deadline = setTimeout(() => finish(new Error('Session did not respond')), timeout);
     deadline.unref?.();
     socket.setNoDelay(true);
     socket.on('error', error => finish(error));
-    socket.on('connect', () => {
-      try { socket.write(JSON.stringify(payload) + '\n'); } catch (error) { finish(error); }
-    });
+    socket.on('connect', () => socket.write(JSON.stringify(payload) + '\n'));
     socket.on('data', chunk => {
       bytes += chunk.length;
       if (bytes > MAX_FRAME) { finish(new Error('Response too large')); return; }
